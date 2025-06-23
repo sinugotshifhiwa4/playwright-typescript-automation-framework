@@ -1,0 +1,37 @@
+{
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "cSpell.words": [
+    "Tshifhiwa",
+    "Sinugo",
+    "esbenp",
+    "ciphertext",
+    "Logform",
+    "viewports",
+    "maxsize",
+    "Ortoni",
+    "uncolorize",
+    "orangehrm"
+  ],
+  "cSpell.ignorePaths": [
+    "node_modules/**",
+    "logs/**",
+    "playwright-report/**",
+    "ortoni-report/**",
+    "src/testData/**"
+  ],
+  "cSpell.allowCompoundWords": true,
+  "cSpell.caseSensitive": false
+}
