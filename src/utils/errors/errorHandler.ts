@@ -4,40 +4,29 @@ import logger from '../logging/loggerManager';
 import ErrorProcessor from './errorProcessor';
 
 export default class ErrorHandler {
-  // Cache with timestamps to enable time-based expiration
-  private static loggedErrors = new Map<string, number>();
+  private static loggedErrors = new Set<string>();
 
-  // Configuration constants
-  private static readonly MAX_CACHE_SIZE = 1000;
-  private static readonly CACHE_TTL = 1000 * 60 * 20; // 20 minutes in milliseconds
-
-  /**
-   * Enhanced error capture with better context handling
-   */
   public static captureError(error: unknown, source: string, context?: string): void {
     try {
-      // Generate error details
       const details = ErrorProcessor.createErrorDetails(error, source, context);
-
-      // Create a cache key to avoid duplicate logging
       const cacheKey = ErrorProcessor.createCacheKey(details);
 
-      // Skip if already logged recently
-      if (this.isRecentlyLogged(cacheKey)) {
+      // Skip if already logged this execution
+      if (this.loggedErrors.has(cacheKey)) {
         return;
       }
 
-      // Add to cache and maintain cache size
-      this.manageCacheSize(cacheKey);
-
-      // Log the primary error
+      this.loggedErrors.add(cacheKey);
       this.logStructuredError(details);
-
-      // Log additional details if available
       this.logAdditionalDetails(error, source);
     } catch (loggingError) {
       this.handleLoggingFailure(loggingError, source);
     }
+  }
+
+   public static logAndThrow(message: string, source: string): never {
+    this.captureError(new Error(message), source);
+    throw new Error(message);
   }
 
   /**
@@ -114,98 +103,13 @@ export default class ErrorHandler {
   }
 
   /**
-   * Enhanced cache management with better performance
-   */
-  private static manageCacheSize(cacheKey: string): void {
-    const now = Date.now();
-
-    // Clean expired entries less frequently for better performance
-    if (this.loggedErrors.size % 50 === 0) {
-      this.cleanExpiredEntries(now);
-    }
-
-    // Add new entry
-    this.loggedErrors.set(cacheKey, now);
-
-    // Only remove oldest if we're significantly over the limit
-    if (this.loggedErrors.size > this.MAX_CACHE_SIZE * 1.1) {
-      this.removeOldestEntries();
-    }
-  }
-
-  public static logAndThrow(message: string): never;
-  public static logAndThrow(message: string, source: string): never;
-  public static logAndThrow(message: string, source: string = 'Source not specified'): never {
-    this.captureError(new Error(message), source);
-    throw new Error(message);
-  }
-
-  /**
-   * Log error but continue execution
-   */
-  public static logAndContinue(error: unknown, source: string, context?: string): void {
-    this.captureError(error, source, context ? `${context} (non-fatal)` : 'Non-fatal error');
-  }
-
-  /**
-   * Reset the logged errors cache (useful for testing)
-   */
-  public static resetCache(): void {
-    this.loggedErrors.clear();
-  }
-
-  /**
-   * Check if error was recently logged (still in cache and not expired)
-   */
-  private static isRecentlyLogged(cacheKey: string): boolean {
-    const timestamp = this.loggedErrors.get(cacheKey);
-    if (!timestamp) return false;
-
-    const now = Date.now();
-    if (now - timestamp > this.CACHE_TTL) {
-      // Entry exists but expired - remove it
-      this.loggedErrors.delete(cacheKey);
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Remove entries that have exceeded the TTL
-   */
-  private static cleanExpiredEntries(now: number): void {
-    this.loggedErrors.forEach((timestamp, key) => {
-      if (now - timestamp > this.CACHE_TTL) {
-        this.loggedErrors.delete(key);
-      }
-    });
-  }
-
-  /**
-   * Remove the oldest logged error entries to maintain cache size within limit.
-   */
-  private static removeOldestEntries(): void {
-    // Convert loggedErrors map to an array of [errorHash, timestamp] pairs
-    const errorEntryList = Array.from(this.loggedErrors.entries());
-
-    // Sort error entries by timestamp in ascending order (oldest first)
-    errorEntryList.sort(([, timestampA], [, timestampB]) => timestampA - timestampB);
-
-    // Determine how many entries need to be removed to stay within MAX_CACHE_SIZE
-    const excessEntryCount = this.loggedErrors.size - this.MAX_CACHE_SIZE;
-
-    // Remove the oldest entries based on the calculated excess
-    for (let index = 0; index < excessEntryCount; index++) {
-      const [oldestErrorHash] = errorEntryList[index];
-      this.loggedErrors.delete(oldestErrorHash);
-    }
-  }
-
-  /**
    * Public accessor for getErrorMessage to maintain API compatibility
    */
   public static getErrorMessage(error: unknown): string {
     return ErrorProcessor.getErrorMessage(error);
+  }
+
+  public static resetCache(): void {
+    this.loggedErrors.clear();
   }
 }

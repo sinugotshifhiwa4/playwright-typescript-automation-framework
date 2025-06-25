@@ -137,28 +137,37 @@ export default class ErrorProcessor {
 
   // PRIVATE HELPER METHODS BELOW
 
-  /**
-   * Combined method to analyze errors and determine both category and context
-   * @param error The error object to analyze
-   * @returns An object containing both the error category and context
-   */
   private static analyzeError(error: unknown): { category: ErrorCategory; context: string } {
-    // Default result
-    const result = {
-      category: ErrorCategory.UNKNOWN,
-      context: 'General Error',
-    };
+    // Check for native JavaScript errors first (common in browser automation)
+    const jsErrorResult = this.analyzeJavaScriptError(error);
+    if (jsErrorResult.category !== ErrorCategory.UNKNOWN) {
+      return jsErrorResult;
+    }
 
+    // Check for Playwright-specific errors (highest priority for UI automation)
     if (this.isPlaywrightError(error)) {
       return this.analyzePlaywrightError(error);
     }
 
+    // Check for browser-specific errors
+    const browserErrorResult = this.analyzeBrowserError(error);
+    if (browserErrorResult.category !== ErrorCategory.UNKNOWN) {
+      return browserErrorResult;
+    }
+
+    // Check for HTTP/API errors (important for API testing)
+    const httpErrorResult = this.analyzeHttpError(error);
+    if (httpErrorResult.category !== ErrorCategory.UNKNOWN) {
+      return httpErrorResult;
+    }
+
+    // Check for system errors with codes
     if (error instanceof Error && 'code' in error) {
       const systemResult = this.analyzeSystemError(error as Error & { code?: string | undefined });
       if (systemResult) return systemResult;
     }
 
-    // Check for timeout patterns in regular errors
+    // Check for timeout patterns (critical in UI automation)
     if (this.isTimeoutError(error)) {
       return {
         category: ErrorCategory.TIMEOUT,
@@ -166,42 +175,120 @@ export default class ErrorProcessor {
       };
     }
 
-    // Handle AppError case
+    // Handle CustomError/AppError
     if (error instanceof CustomError) {
       return this.analyzeAppError(error);
     }
 
-    // For other error types, analyze the message text
+    // Analyze error message for patterns
     const messageAnalysisResult = this.analyzeErrorMessage(error);
     if (messageAnalysisResult.category !== ErrorCategory.UNKNOWN) {
       return messageAnalysisResult;
     }
 
-    // Default with error name if available
+    // Default fallback with error name if available
+    const result = {
+      category: ErrorCategory.UNKNOWN,
+      context: 'General Error',
+    };
+
     if (error instanceof Error && error.name) {
       result.context = `${error.name} Error`;
     }
 
     return result;
   }
-
-  /**
-   * Analyze Playwright test errors
-   */
   private static analyzePlaywrightError(
     error: Error & { matcherResult?: interfaces.PlaywrightMatcherResult },
   ): { category: ErrorCategory; context: string } {
     const errorMessage = error.message.toLowerCase();
 
-    // Check for locator-related errors first
+    // Screenshot-specific errors
+    if (
+      errorMessage.includes('screenshot') ||
+      (error.matcherResult?.name && error.matcherResult.name.includes('screenshot'))
+    ) {
+      return {
+        category: ErrorCategory.SCREENSHOT_ERROR,
+        context: 'Playwright Screenshot Error',
+      };
+    }
+
+    // Download/Upload errors
+    if (errorMessage.includes('download') || errorMessage.includes('waitForDownload')) {
+      return {
+        category: ErrorCategory.DOWNLOAD_ERROR,
+        context: 'Playwright Download Error',
+      };
+    }
+
+    if (errorMessage.includes('upload') || errorMessage.includes('setInputFiles')) {
+      return {
+        category: ErrorCategory.UPLOAD_ERROR,
+        context: 'Playwright Upload Error',
+      };
+    }
+
+    // Navigation errors
+    if (
+      errorMessage.includes('goto') ||
+      errorMessage.includes('navigation') ||
+      errorMessage.includes('waitForNavigation')
+    ) {
+      return {
+        category: ErrorCategory.NAVIGATION,
+        context: 'Playwright Navigation Error',
+      };
+    }
+
+    // Locator errors - check for specific patterns
     if (errorMessage.includes('locator.')) {
+      // More specific locator error analysis
+      if (errorMessage.includes('locator.fill') || errorMessage.includes('locator.type')) {
+        return {
+          category: ErrorCategory.ELEMENT,
+          context: 'Playwright Input Error',
+        };
+      }
+
+      if (errorMessage.includes('locator.click')) {
+        return {
+          category: ErrorCategory.ELEMENT,
+          context: 'Playwright Click Error',
+        };
+      }
+
       return {
         category: ErrorCategory.LOCATOR,
         context: 'Playwright Locator Error',
       };
     }
 
-    // Check specifically for timeout errors in Playwright tests
+    // Selector errors
+    if (
+      errorMessage.includes('selector') ||
+      errorMessage.includes('invalid selector') ||
+      errorMessage.includes('selector resolved to')
+    ) {
+      return {
+        category: ErrorCategory.SELECTOR,
+        context: 'Playwright Selector Error',
+      };
+    }
+
+    // Element visibility/interaction errors
+    if (
+      errorMessage.includes('not visible') ||
+      errorMessage.includes('not attached') ||
+      errorMessage.includes('element is not attached')
+    ) {
+      return {
+        category: ErrorCategory.ELEMENT,
+        context: 'Playwright Element State Error',
+      };
+    }
+
+    // Timeout errors in Playwright context
     if (this.isTimeoutError(error)) {
       return {
         category: ErrorCategory.TIMEOUT,
@@ -209,65 +296,10 @@ export default class ErrorProcessor {
       };
     }
 
+    // Generic Playwright test/assertion error
     return {
       category: ErrorCategory.TEST,
-      context: `Playwright Assertion: ${error.matcherResult?.name || 'Unknown'}`,
-    };
-  }
-
-  /**
-   * Analyze Playwright locator-specific errors
-   */
-  private static analyzePlaywrightLocatorError(error: Error): {
-    category: ErrorCategory;
-    context: string;
-  } {
-    const errorMessage = error.message.toLowerCase();
-
-    // Check for browser/page closure errors
-    if (errorMessage.includes('target page, context or browser has been closed')) {
-      return {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Browser Closed Error',
-      };
-    }
-
-    // Check for element not found/visible errors
-    if (errorMessage.includes('element not visible') || errorMessage.includes('not visible')) {
-      return {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Element Not Visible Error',
-      };
-    }
-
-    // Check for element not attached errors
-    if (errorMessage.includes('element is not attached to the dom')) {
-      return {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Element Not Attached Error',
-      };
-    }
-
-    // Check for selector errors
-    if (errorMessage.includes('selector resolved to') && errorMessage.includes('elements')) {
-      return {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Multiple Elements Error',
-      };
-    }
-
-    // Check for locator timeout
-    if (errorMessage.includes('locator.') && errorMessage.includes('timeout')) {
-      return {
-        category: ErrorCategory.TIMEOUT,
-        context: 'Playwright Locator Timeout Error',
-      };
-    }
-
-    // Generic locator error
-    return {
-      category: ErrorCategory.LOCATOR,
-      context: 'Playwright Locator Error',
+      context: `Playwright Test Error: ${error.matcherResult?.name || 'Unknown'}`,
     };
   }
 
@@ -344,123 +376,251 @@ export default class ErrorProcessor {
     return result;
   }
 
-  /**
-   * Find a matching error category based on keywords in the error message
-   */
   private static findCategoryFromErrorMessage(
     errorMessage: string,
   ): { category: ErrorCategory; context: string } | null {
-    // Normalize the message for better matching
     const normalized = errorMessage.toLowerCase().trim();
 
-    // Define category-context mapping with improved keyword matching
+    // Playwright-optimized category-context mapping
     const categoryContextMap = [
-      // Playwright locator errors - check first for specificity
+      // Browser and page errors (highest priority for UI automation)
       {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Browser Closed Error',
-        keywords: ['target page, context or browser has been closed'],
+        category: ErrorCategory.BROWSER_ERROR,
+        context: 'Browser Error',
+        keywords: [
+          'browser closed',
+          'browser crashed',
+          'chromium',
+          'firefox',
+          'webkit',
+          'browser context',
+        ],
+      },
+      {
+        category: ErrorCategory.PAGE_ERROR,
+        context: 'Page Error',
+        keywords: ['page closed', 'page crashed', 'page.goto', 'page navigation', 'target page'],
+      },
+      {
+        category: ErrorCategory.FRAME_ERROR,
+        context: 'Frame Error',
+        keywords: ['frame detached', 'frame not found', 'iframe', 'frame.locator'],
+      },
+
+      // UI interaction errors
+      {
+        category: ErrorCategory.ELEMENT,
+        context: 'Element Interaction Error',
+        keywords: [
+          'element not visible',
+          'element not attached',
+          'element is not attached',
+          'not interactable',
+        ],
       },
       {
         category: ErrorCategory.LOCATOR,
-        context: 'Playwright Locator Error',
-        keywords: ['locator.fill', 'locator.click', 'locator.type', 'locator.clear'],
+        context: 'Locator Error',
+        keywords: [
+          'locator.fill',
+          'locator.click',
+          'locator.type',
+          'locator.clear',
+          'locator not found',
+        ],
       },
       {
-        category: ErrorCategory.LOCATOR,
-        context: 'Playwright Locator Navigation Error',
-        keywords: ['locator.locator', 'locator.first', 'locator.last'],
+        category: ErrorCategory.SELECTOR,
+        context: 'Selector Error',
+        keywords: [
+          'invalid selector',
+          'selector resolved to',
+          'malformed selector',
+          'css selector',
+        ],
       },
-      // Rate limiting - check before general HTTP errors
+
+      // File operations (common in UI testing)
+      {
+        category: ErrorCategory.SCREENSHOT_ERROR,
+        context: 'Screenshot Error',
+        keywords: [
+          'screenshot failed',
+          'screenshot timeout',
+          'screenshot error',
+          'page.screenshot',
+        ],
+      },
+      {
+        category: ErrorCategory.DOWNLOAD_ERROR,
+        context: 'Download Error',
+        keywords: ['download failed', 'download timeout', 'waitForDownload', 'download error'],
+      },
+      {
+        category: ErrorCategory.UPLOAD_ERROR,
+        context: 'Upload Error',
+        keywords: ['upload failed', 'upload timeout', 'setInputFiles', 'file upload'],
+      },
+
+      // Dialog and interaction
+      {
+        category: ErrorCategory.DIALOG,
+        context: 'Dialog Error',
+        keywords: ['dialog', 'alert', 'confirm', 'prompt', 'page.on(dialog)'],
+      },
+
+      // Network and API errors
+      {
+        category: ErrorCategory.INTERCEPT,
+        context: 'Network Interception Error',
+        keywords: ['route', 'intercept', 'page.route', 'request interception', 'mock response'],
+      },
+      {
+        category: ErrorCategory.CORS,
+        context: 'CORS Error',
+        keywords: ['cors', 'cross-origin', 'access-control-allow-origin', 'preflight'],
+      },
+      {
+        category: ErrorCategory.TOKEN_EXPIRED,
+        context: 'Token Expired Error',
+        keywords: ['token expired', 'jwt expired', 'token invalid', 'access token'],
+      },
+
+      // Test execution
+      {
+        category: ErrorCategory.RETRY_EXHAUSTED,
+        context: 'Retry Exhausted Error',
+        keywords: ['retry exhausted', 'max retries', 'all retries failed', 'retry limit'],
+      },
+      {
+        category: ErrorCategory.FIXTURE,
+        context: 'Test Fixture Error',
+        keywords: ['fixture failed', 'before each', 'after each', 'setup failed'],
+      },
+
+      // Mobile-specific
+      {
+        category: ErrorCategory.MOBILE_DEVICE,
+        context: 'Mobile Device Error',
+        keywords: ['mobile', 'device emulation', 'viewport', 'touch', 'mobile context'],
+      },
+      {
+        category: ErrorCategory.MOBILE_CONTEXT,
+        context: 'Mobile Context Error',
+        keywords: ['mobile context', 'device context', 'emulation failed'],
+      },
+
+      // HTTP errors (important for API testing)
       {
         category: ErrorCategory.RATE_LIMIT,
         context: 'Rate Limit Error',
-        keywords: ['rate limit', 'too many requests', 'quota exceeded', 'throttled'],
+        keywords: ['rate limit', 'too many requests', 'quota exceeded', 'throttled', '429'],
       },
-      // Timeout errors - prioritize these
+      {
+        category: ErrorCategory.HTTP_CLIENT,
+        context: 'HTTP Client Error',
+        keywords: ['400', '401', '403', '404', '409', '422', 'client error'],
+      },
+      {
+        category: ErrorCategory.HTTP_SERVER,
+        context: 'HTTP Server Error',
+        keywords: ['500', '502', '503', '504', 'server error', 'internal server'],
+      },
+
+      // Timeout (critical in UI automation)
       {
         category: ErrorCategory.TIMEOUT,
         context: 'Timeout Error',
-        keywords: ['timeout', 'timed out', 'timeout exceeded', 'wait timeout'],
+        keywords: [
+          'timeout',
+          'timed out',
+          'timeout exceeded',
+          'wait timeout',
+          'navigation timeout',
+        ],
       },
-      // Authentication and permission errors
+
+      // Authentication/Authorization
       {
         category: ErrorCategory.AUTHENTICATION,
         context: 'Authentication Error',
-        keywords: [
-          'authentication failed',
-          'login failed',
-          'unauthorized',
-          'invalid credentials',
-          'auth failed',
-        ],
+        keywords: ['authentication failed', 'login failed', 'unauthorized', 'invalid credentials'],
       },
       {
         category: ErrorCategory.AUTHORIZATION,
-        context: 'Permission Error',
-        keywords: [
-          'authorization failed',
-          'forbidden',
-          'access denied',
-          'permission denied',
-          'insufficient privileges',
-        ],
+        context: 'Authorization Error',
+        keywords: ['authorization failed', 'forbidden', 'access denied', 'permission denied'],
       },
-      // Database errors - use more specific phrases
-      {
-        category: ErrorCategory.DATABASE,
-        context: 'Database Error',
-        keywords: ['database error', 'db error', 'sql error', 'query failed', 'database exception'],
-      },
-      {
-        category: ErrorCategory.CONNECTION,
-        context: 'Connection Error',
-        keywords: [
-          'connection failed',
-          'connection refused',
-          'connection timeout',
-          'unable to connect',
-        ],
-      },
-      {
-        category: ErrorCategory.CONSTRAINT,
-        context: 'Database Constraint Error',
-        keywords: ['constraint violation', 'duplicate key', 'foreign key', 'unique constraint'],
-      },
-      // Not found errors
-      {
-        category: ErrorCategory.NOT_FOUND,
-        context: 'Not Found Error',
-        keywords: ['not found', 'does not exist', 'missing', 'no such'],
-      },
-      // Network errors
-      {
-        category: ErrorCategory.NETWORK,
-        context: 'Network Error',
-        keywords: ['network error', 'network failure', 'dns', 'host unreachable'],
-      },
-      // Validation errors
+
+      // Data and validation
       {
         category: ErrorCategory.VALIDATION,
         context: 'Validation Error',
-        keywords: ['validation', 'invalid', 'schema', 'malformed'],
+        keywords: ['validation', 'invalid', 'schema', 'malformed', 'validation failed'],
       },
-      // Configuration errors
       {
-        category: ErrorCategory.CONFIGURATION,
-        context: 'Configuration Error',
-        keywords: ['config', 'configuration', 'environment variable', 'missing setting'],
+        category: ErrorCategory.PARSING,
+        context: 'Parsing Error',
+        keywords: ['parse error', 'json parse', 'xml parse', 'parsing failed'],
       },
-      // Memory and resource errors
+      {
+        category: ErrorCategory.FORMAT_ERROR,
+        context: 'Format Error',
+        keywords: ['format error', 'invalid format', 'malformed data', 'format mismatch'],
+      },
+
+      // External services
+      {
+        category: ErrorCategory.THIRD_PARTY_SERVICE,
+        context: 'Third Party Service Error',
+        keywords: ['third party', 'external service', 'api error', 'service unavailable'],
+      },
+      {
+        category: ErrorCategory.WEBHOOK_ERROR,
+        context: 'Webhook Error',
+        keywords: ['webhook failed', 'webhook timeout', 'webhook error'],
+      },
+
+      // Performance and resources
       {
         category: ErrorCategory.MEMORY,
         context: 'Memory Error',
         keywords: ['out of memory', 'memory', 'heap', 'allocation failed'],
       },
       {
-        category: ErrorCategory.RESOURCE_LIMIT,
-        context: 'Resource Limit Error',
-        keywords: ['resource limit', 'quota', 'no space', 'disk full', 'limit exceeded'],
+        category: ErrorCategory.PERFORMANCE,
+        context: 'Performance Error',
+        keywords: ['performance', 'slow', 'performance budget', 'metrics'],
+      },
+
+      // Configuration and environment
+      {
+        category: ErrorCategory.CONFIGURATION,
+        context: 'Configuration Error',
+        keywords: [
+          'config',
+          'configuration',
+          'environment variable',
+          'missing setting',
+          'playwright.config',
+        ],
+      },
+      {
+        category: ErrorCategory.ENVIRONMENT,
+        context: 'Environment Error',
+        keywords: ['environment', 'env', 'missing dependency', 'path not found'],
+      },
+
+      // Generic fallbacks
+      {
+        category: ErrorCategory.NOT_FOUND,
+        context: 'Not Found Error',
+        keywords: ['not found', 'does not exist', 'missing', 'no such'],
+      },
+      {
+        category: ErrorCategory.NETWORK,
+        context: 'Network Error',
+        keywords: ['network error', 'network failure', 'dns', 'host unreachable'],
       },
     ];
 
@@ -484,66 +644,47 @@ export default class ErrorProcessor {
     return null;
   }
 
-  /**
-   * Get context from system error codes
-   */
+  private static getSystemErrorCategory(error: Error & { code?: string }): ErrorCategory | null {
+    if (!error.code) return null;
+
+    const codeMap: Record<string, ErrorCategory> = {
+      // File system errors (important for screenshots, downloads, reports)
+      ENOENT: ErrorCategory.FILE_NOT_FOUND,
+      EEXIST: ErrorCategory.FILE_EXISTS,
+      EACCES: ErrorCategory.ACCESS_DENIED,
+      EFBIG: ErrorCategory.FILE_TOO_LARGE,
+
+      // Network error codes (for API testing)
+      ECONNREFUSED: ErrorCategory.CONNECTION,
+      ECONNRESET: ErrorCategory.CONNECTION,
+      ETIMEDOUT: ErrorCategory.TIMEOUT,
+      EHOSTUNREACH: ErrorCategory.NETWORK,
+      ENETUNREACH: ErrorCategory.NETWORK,
+
+      // Permission and security
+      EPERM: ErrorCategory.SECURITY_ERROR,
+    };
+
+    return codeMap[error.code] || null;
+  }
+
   private static getContextFromSystemError(error: Error & { code?: string }): string {
     if (!error.code) return 'System Error';
 
     const contextMap: Record<string, string> = {
       ENOENT: 'File Not Found Error',
-      EISDIR: 'Path Is Directory Error',
-      ENOTDIR: 'Not A Directory Error',
-      ENOTEMPTY: 'Directory Not Empty Error',
       EEXIST: 'File Already Exists Error',
       EACCES: 'File Access Denied Error',
-      EBUSY: 'File Busy Error',
       EFBIG: 'File Too Large Error',
-      ENAMETOOLONG: 'File Name Too Long Error',
-      ENOSPC: 'No Space Error',
-      EROFS: 'Read Only File System Error',
+      ECONNREFUSED: 'Connection Refused Error',
+      ECONNRESET: 'Connection Reset Error',
+      ETIMEDOUT: 'Connection Timeout Error',
+      EHOSTUNREACH: 'Host Unreachable Error',
+      ENETUNREACH: 'Network Unreachable Error',
+      EPERM: 'Permission Denied Error',
     };
 
     return contextMap[error.code] || 'System Error';
-  }
-
-  /**
-   * Safely extract a readable URL path from a URL string
-   */
-  private static safeUrl(url?: string): string {
-    if (!url) return 'unknown';
-
-    try {
-      const parsed = new URL(url);
-      // Remove query parameters and return just the path
-      return parsed.pathname;
-    } catch {
-      // If URL parsing fails, return a truncated version
-      return url.slice(0, 50);
-    }
-  }
-
-  /**
-   * Extract system error category from NodeJS error codes
-   */
-  private static getSystemErrorCategory(error: Error & { code?: string }): ErrorCategory | null {
-    if (!error.code) return null;
-
-    const codeMap: Record<string, ErrorCategory> = {
-      ENOENT: ErrorCategory.FILE_NOT_FOUND,
-      EISDIR: ErrorCategory.PATH_IS_DIRECTORY,
-      ENOTDIR: ErrorCategory.NOT_A_DIRECTORY,
-      ENOTEMPTY: ErrorCategory.DIRECTORY_NOT_EMPTY,
-      EEXIST: ErrorCategory.FILE_EXISTS,
-      EACCES: ErrorCategory.ACCESS_DENIED,
-      EBUSY: ErrorCategory.FILE_BUSY,
-      EFBIG: ErrorCategory.FILE_TOO_LARGE,
-      ENAMETOOLONG: ErrorCategory.FILE_NAME_TOO_LONG,
-      ENOSPC: ErrorCategory.NO_SPACE,
-      EROFS: ErrorCategory.READ_ONLY_FILE_SYSTEM,
-    };
-
-    return codeMap[error.code] || null;
   }
 
   /**
@@ -579,5 +720,200 @@ export default class ErrorProcessor {
             .map((entry) => this.cleanMessage(entry))
         : undefined,
     };
+  }
+
+  private static analyzeJavaScriptError(error: unknown): {
+    category: ErrorCategory;
+    context: string;
+  } {
+    if (!(error instanceof Error)) {
+      return { category: ErrorCategory.UNKNOWN, context: 'General Error' };
+    }
+
+    // Map JavaScript error types to categories
+    const jsErrorMap: Record<string, { category: ErrorCategory; context: string }> = {
+      TypeError: { category: ErrorCategory.TYPE_ERROR, context: 'Type Error' },
+      ReferenceError: { category: ErrorCategory.REFERENCE_ERROR, context: 'Reference Error' },
+      SyntaxError: { category: ErrorCategory.SYNTAX_ERROR, context: 'Syntax Error' },
+      RangeError: { category: ErrorCategory.RANGE_ERROR, context: 'Range Error' },
+    };
+
+    const errorMapping = jsErrorMap[error.name];
+    if (errorMapping) {
+      return errorMapping;
+    }
+
+    return { category: ErrorCategory.UNKNOWN, context: 'General Error' };
+  }
+
+  /**
+   * NEW METHOD: Analyze browser-specific errors
+   */
+  private static analyzeBrowserError(error: unknown): { category: ErrorCategory; context: string } {
+    const errorMessage = this.getErrorMessage(error).toLowerCase();
+
+    // Browser crash/closure patterns
+    if (
+      errorMessage.includes('browser has been closed') ||
+      errorMessage.includes('browser closed') ||
+      errorMessage.includes('browser crashed')
+    ) {
+      return { category: ErrorCategory.BROWSER_ERROR, context: 'Browser Closed Error' };
+    }
+
+    // Page-related errors
+    if (
+      errorMessage.includes('page has been closed') ||
+      errorMessage.includes('page closed') ||
+      errorMessage.includes('target page')
+    ) {
+      return { category: ErrorCategory.PAGE_ERROR, context: 'Page Closed Error' };
+    }
+
+    // Frame-related errors
+    if (
+      errorMessage.includes('frame') &&
+      (errorMessage.includes('detached') || errorMessage.includes('not found'))
+    ) {
+      return { category: ErrorCategory.FRAME_ERROR, context: 'Frame Error' };
+    }
+
+    // Dialog handling errors
+    if (
+      errorMessage.includes('dialog') ||
+      errorMessage.includes('alert') ||
+      errorMessage.includes('confirm') ||
+      errorMessage.includes('prompt')
+    ) {
+      return { category: ErrorCategory.DIALOG, context: 'Dialog Handling Error' };
+    }
+
+    // Network interception errors
+    if (
+      errorMessage.includes('route') ||
+      errorMessage.includes('intercept') ||
+      errorMessage.includes('mock') ||
+      errorMessage.includes('request interception')
+    ) {
+      return { category: ErrorCategory.INTERCEPT, context: 'Network Interception Error' };
+    }
+
+    // Mobile context errors
+    if (
+      errorMessage.includes('mobile') ||
+      errorMessage.includes('device') ||
+      (errorMessage.includes('viewport') && errorMessage.includes('mobile'))
+    ) {
+      return { category: ErrorCategory.MOBILE_DEVICE, context: 'Mobile Device Error' };
+    }
+
+    return { category: ErrorCategory.UNKNOWN, context: 'General Error' };
+  }
+
+  private static analyzeHttpError(error: unknown): { category: ErrorCategory; context: string } {
+    const errorMessage = this.getErrorMessage(error).toLowerCase();
+
+    // Check for HTTP status code patterns
+    if (error && typeof error === 'object') {
+      // Define proper types for different error structures
+      interface AxiosLikeError {
+        response?: {
+          status?: number;
+        };
+      }
+
+      interface StatusError {
+        status?: number;
+        statusCode?: number;
+      }
+
+      // Type guard for Axios-style errors
+      function isAxiosLikeError(obj: object): obj is AxiosLikeError {
+        return (
+          'response' in obj &&
+          obj.response !== null &&
+          typeof obj.response === 'object' &&
+          'status' in obj.response
+        );
+      }
+
+      // Type guard for status errors
+      function isStatusError(obj: object): obj is StatusError {
+        return 'status' in obj || 'statusCode' in obj;
+      }
+
+      // Axios-style errors
+      if (isAxiosLikeError(error)) {
+        const status = error.response?.status;
+        if (typeof status === 'number') {
+          if (status >= 400 && status < 500) {
+            // Handle specific 4xx errors
+            switch (status) {
+              case 401:
+                return {
+                  category: ErrorCategory.AUTHENTICATION,
+                  context: 'Authentication Error (401)',
+                };
+              case 403:
+                return {
+                  category: ErrorCategory.AUTHORIZATION,
+                  context: 'Authorization Error (403)',
+                };
+              case 404:
+                return { category: ErrorCategory.NOT_FOUND, context: 'Not Found Error (404)' };
+              case 409:
+                return { category: ErrorCategory.CONFLICT, context: 'Conflict Error (409)' };
+              case 429:
+                return { category: ErrorCategory.RATE_LIMIT, context: 'Rate Limit Error (429)' };
+              default:
+                return { category: ErrorCategory.HTTP_CLIENT, context: `Client Error (${status})` };
+            }
+          } else if (status >= 500) {
+            return { category: ErrorCategory.HTTP_SERVER, context: `Server Error (${status})` };
+          }
+        }
+      }
+
+      // Check for status code in error properties
+      if (isStatusError(error)) {
+        const status = error.status ?? error.statusCode;
+        if (typeof status === 'number') {
+          if (status >= 400 && status < 500) {
+            return { category: ErrorCategory.HTTP_CLIENT, context: `Client Error (${status})` };
+          } else if (status >= 500) {
+            return { category: ErrorCategory.HTTP_SERVER, context: `Server Error (${status})` };
+          }
+        }
+      }
+    }
+
+    // CORS errors (common in web testing)
+    if (
+      errorMessage.includes('cors') ||
+      errorMessage.includes('cross-origin') ||
+      errorMessage.includes('access-control-allow-origin')
+    ) {
+      return { category: ErrorCategory.CORS, context: 'CORS Error' };
+    }
+
+    // Token/JWT errors
+    if (
+      errorMessage.includes('token expired') ||
+      errorMessage.includes('jwt expired') ||
+      errorMessage.includes('token invalid')
+    ) {
+      return { category: ErrorCategory.TOKEN_EXPIRED, context: 'Token Expired Error' };
+    }
+
+    // API version errors
+    if (
+      errorMessage.includes('api version') ||
+      errorMessage.includes('version not supported') ||
+      errorMessage.includes('deprecated api')
+    ) {
+      return { category: ErrorCategory.API_VERSION_ERROR, context: 'API Version Error' };
+    }
+
+    return { category: ErrorCategory.UNKNOWN, context: 'General Error' };
   }
 }

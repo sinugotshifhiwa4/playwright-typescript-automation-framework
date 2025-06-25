@@ -4,13 +4,13 @@ import {
 } from '../../config/coreTypes/configTypes/sanitization.types';
 import { SensitiveKeyCache } from './sensitiveKeyCache';
 import { MaskValue, NeverTruncateDefaultKeys } from './sanitization.constants.ts';
-import { DefaultSensitiveKeys, DefaultSensitivePatterns } from './sensitive-keys.config';
+import { defaultSensitiveKeys, defaultSensitivePatterns } from './sensitive-keys.config';
 import ErrorHandler from '../errors/errorHandler';
 import logger from '../logging/loggerManager';
 
 export default class DataSanitizer {
   private static defaultSanitizationParams: SanitizationParams = {
-    sensitiveKeys: DefaultSensitiveKeys,
+    sensitiveKeys: defaultSensitiveKeys,
     maskValue: MaskValue,
     truncateUrls: false,
     maxStringLength: 1000,
@@ -179,7 +179,7 @@ export default class DataSanitizer {
       return { hasSensitive: false, patterns: [] };
     }
 
-    const patterns = [...DefaultSensitivePatterns, ...(config.customPatterns || [])];
+    const patterns = [...defaultSensitivePatterns, ...(config.customPatterns || [])];
     const foundPatterns: string[] = [];
 
     for (const pattern of patterns) {
