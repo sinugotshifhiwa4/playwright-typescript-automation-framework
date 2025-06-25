@@ -1,6 +1,8 @@
 {
   "dependencies": {
+    "@faker-js/faker": "^9.8.0",
     "argon2": "^0.43.0",
+    "axios": "^1.10.0",
     "cross-env": "^7.0.3",
     "dotenv": "^16.5.0",
     "moment-timezone": "^0.6.0",
